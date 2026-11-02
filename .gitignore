@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# secrets
+.env
+.env.*
+!.env.example
+api/wallet/
+*.pem
+*.p12
+*.sso
+wallet*.zip
+
+# build output
+dist/
+coverage/
+
+# os and editor
+.DS_Store
+.vscode/
