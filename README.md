@@ -1,10 +1,23 @@
-# BOMTrace
+h1 align="center">BOMTrace</h1>
+ 
+<p align="center">
+  <b>Oracle-backed PLM change order tracker</b><br>
+  Multi-level BOMs, where-used impact analysis and an approval workflow, with the business rules in PL/SQL.
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Oracle_Database-F80000?style=for-the-badge&logo=oracle&logoColor=white" alt="Oracle Database">
+  <img src="https://img.shields.io/badge/PL%2FSQL-F80000?style=for-the-badge&logo=oracle&logoColor=white" alt="PL/SQL">
+  <img src="https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node.js">
+  <img src="https://img.shields.io/badge/Express-000000?style=for-the-badge&logo=express&logoColor=white" alt="Express">
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Status-In_Progress-orange?style=for-the-badge" alt="Status: in progress">
+  <img src="https://img.shields.io/badge/Progress-Day_2_of_10-blue?style=for-the-badge" alt="Progress: Day 2 of 10">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT">
+  <img src="https://img.shields.io/github/last-commit/RahimAbbas55/BOMTrace?style=for-the-badge" alt="Last commit">
+</p>
 
-Oracle-backed PLM change order tracker. Manage items, multi-level bills of materials (BOMs) and engineering change orders, with where-used impact analysis and an approval workflow.
-
-**Stack:** Oracle Autonomous Database, PL/SQL, Node.js, Express, React, Docker, GitHub Actions, Oracle Cloud (OCI).
-
-**Status:** in progress (Day 2 of 10 complete). Live demo and screenshots will be added after deployment.
+Manage items, multi-level bills of materials (BOMs) and engineering change orders on Oracle Autonomous Database. Live demo and screenshots will be added after deployment.
 
 ## Why this project
 
