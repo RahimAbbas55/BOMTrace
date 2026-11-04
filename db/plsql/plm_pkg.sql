@@ -1,6 +1,34 @@
 CREATE OR REPLACE PACKAGE plm_pkg AS
-  -- error codes: -20001 item not found
-
+  -- error codes raised by this package, see docs/error-codes.md for HTTP mapping
+  e_item_not_found      EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_item_not_found,      -20001);
+  e_bom_cycle           EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_bom_cycle,           -20002);
+  e_bom_line_exists     EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_bom_line_exists,     -20003);
+  e_item_obsolete       EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_item_obsolete,       -20004);
+  e_co_not_found        EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_co_not_found,        -20005);
+  e_invalid_transition  EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_invalid_transition,  -20006);
+  e_co_empty            EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_co_empty,            -20007);
+  e_user_not_found      EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_user_not_found,      -20008);
+  e_approver_required   EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_approver_required,   -20009);
+  e_self_approval       EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_self_approval,       -20010);
+  e_comment_required    EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_comment_required,    -20011);
+  e_invalid_co_line     EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_invalid_co_line,     -20012);
+  e_bom_line_not_found  EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_bom_line_not_found,  -20013);
+  e_invalid_quantity    EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_invalid_quantity,    -20014);
+  
   -- full multi-level BOM of an item, depth first, with rolled-up quantities
   FUNCTION explode_bom(p_item_id IN NUMBER) RETURN SYS_REFCURSOR;
 
