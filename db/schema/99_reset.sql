@@ -25,5 +25,13 @@ BEGIN
       -- ORA-04043: object does not exist
       IF SQLCODE != -4043 THEN RAISE; END IF;
   END;
+
+  BEGIN
+    EXECUTE IMMEDIATE 'DROP SEQUENCE co_number_seq';
+  EXCEPTION
+    WHEN OTHERS THEN
+      -- ORA-02289: sequence does not exist
+      IF SQLCODE != -2289 THEN RAISE; END IF;
+  END;
 END;
 /
