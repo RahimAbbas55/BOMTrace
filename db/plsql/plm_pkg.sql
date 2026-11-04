@@ -28,12 +28,22 @@ CREATE OR REPLACE PACKAGE plm_pkg AS
   PRAGMA EXCEPTION_INIT(e_bom_line_not_found,  -20013);
   e_invalid_quantity    EXCEPTION;
   PRAGMA EXCEPTION_INIT(e_invalid_quantity,    -20014);
-  
+
   -- full multi-level BOM of an item, depth first, with rolled-up quantities
   FUNCTION explode_bom(p_item_id IN NUMBER) RETURN SYS_REFCURSOR;
 
   -- every assembly, at any level, that contains the item
   FUNCTION where_used(p_item_id IN NUMBER) RETURN SYS_REFCURSOR;
+
+  -- adds a component to an assembly, rejects cycles, returns the new bom_line_id
+  FUNCTION add_bom_line(
+    p_parent_item_id IN NUMBER,
+    p_child_item_id  IN NUMBER,
+    p_quantity       IN NUMBER
+  ) RETURN NUMBER;
+
+  -- removes a component from an assembly
+  PROCEDURE remove_bom_line(p_bom_line_id IN NUMBER);
 END plm_pkg;
 /
 
@@ -47,6 +57,23 @@ CREATE OR REPLACE PACKAGE BODY plm_pkg AS
     WHEN NO_DATA_FOUND THEN
       RAISE_APPLICATION_ERROR(-20001, 'Item not found: ' || p_item_id);
   END assert_item_exists;
+
+  FUNCTION item_number_of(p_item_id IN NUMBER) RETURN VARCHAR2 IS
+    v_number items.item_number%TYPE;
+  BEGIN
+    SELECT item_number INTO v_number FROM items WHERE item_id = p_item_id;
+    RETURN v_number;
+  END item_number_of;
+
+  PROCEDURE assert_not_obsolete(p_item_id IN NUMBER) IS
+    v_status items.lifecycle_status%TYPE;
+  BEGIN
+    SELECT lifecycle_status INTO v_status FROM items WHERE item_id = p_item_id;
+    IF v_status = 'OBSOLETE' THEN
+      RAISE_APPLICATION_ERROR(-20004,
+        'Item ' || item_number_of(p_item_id) || ' is OBSOLETE and cannot be changed or used');
+    END IF;
+  END assert_not_obsolete;
 
   FUNCTION explode_bom(p_item_id IN NUMBER) RETURN SYS_REFCURSOR IS
     v_cur SYS_REFCURSOR;
@@ -118,6 +145,76 @@ CREATE OR REPLACE PACKAGE BODY plm_pkg AS
 
     RETURN v_cur;
   END where_used;
+
+  FUNCTION add_bom_line(
+    p_parent_item_id IN NUMBER,
+    p_child_item_id  IN NUMBER,
+    p_quantity       IN NUMBER
+  ) RETURN NUMBER IS
+    v_exists NUMBER;
+    v_hits   NUMBER;
+    v_id     bom_lines.bom_line_id%TYPE;
+  BEGIN
+    IF p_quantity IS NULL OR p_quantity <= 0 THEN
+      RAISE_APPLICATION_ERROR(-20014, 'Quantity must be greater than zero');
+    END IF;
+
+    assert_item_exists(p_parent_item_id);
+    assert_item_exists(p_child_item_id);
+    assert_not_obsolete(p_parent_item_id);
+    assert_not_obsolete(p_child_item_id);
+
+    IF p_parent_item_id = p_child_item_id THEN
+      RAISE_APPLICATION_ERROR(-20002,
+        'BOM cycle: ' || item_number_of(p_parent_item_id) || ' cannot contain itself');
+    END IF;
+
+    SELECT COUNT(*) INTO v_exists
+    FROM bom_lines
+    WHERE parent_item_id = p_parent_item_id
+      AND child_item_id  = p_child_item_id;
+
+    IF v_exists > 0 THEN
+      RAISE_APPLICATION_ERROR(-20003,
+        item_number_of(p_parent_item_id) || ' already contains ' || item_number_of(p_child_item_id));
+    END IF;
+
+    -- walk upward from the parent, is the new child one of its ancestors?
+    SELECT COUNT(*) INTO v_hits
+    FROM bom_lines
+    WHERE parent_item_id = p_child_item_id
+    START WITH child_item_id = p_parent_item_id
+    CONNECT BY NOCYCLE PRIOR parent_item_id = child_item_id;
+
+    IF v_hits > 0 THEN
+      RAISE_APPLICATION_ERROR(-20002,
+        'BOM cycle: ' || item_number_of(p_child_item_id) ||
+        ' already contains ' || item_number_of(p_parent_item_id));
+    END IF;
+
+    INSERT INTO bom_lines (parent_item_id, child_item_id, quantity)
+    VALUES (p_parent_item_id, p_child_item_id, p_quantity)
+    RETURNING bom_line_id INTO v_id;
+
+    RETURN v_id;
+  END add_bom_line;
+
+  PROCEDURE remove_bom_line(p_bom_line_id IN NUMBER) IS
+    v_parent bom_lines.parent_item_id%TYPE;
+  BEGIN
+    BEGIN
+      SELECT parent_item_id INTO v_parent
+      FROM bom_lines
+      WHERE bom_line_id = p_bom_line_id;
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20013, 'BOM line not found: ' || p_bom_line_id);
+    END;
+
+    assert_not_obsolete(v_parent);
+
+    DELETE FROM bom_lines WHERE bom_line_id = p_bom_line_id;
+  END remove_bom_line;
 
 END plm_pkg;
 /
