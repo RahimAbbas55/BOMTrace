@@ -64,6 +64,20 @@ CREATE OR REPLACE PACKAGE plm_pkg AS
 
   -- DRAFT to SUBMITTED, needs at least one line and no obsolete items
   PROCEDURE submit_change_order(p_co_id IN NUMBER);
+
+  -- SUBMITTED to APPROVED, approver role required, the creator cannot approve their own
+  PROCEDURE approve_change_order(
+    p_co_id       IN NUMBER,
+    p_approver_id IN NUMBER,
+    p_comments    IN VARCHAR2 DEFAULT NULL
+  );
+
+  -- SUBMITTED to REJECTED, approver role required, a comment is required
+  PROCEDURE reject_change_order(
+    p_co_id       IN NUMBER,
+    p_approver_id IN NUMBER,
+    p_comments    IN VARCHAR2
+  );
 END plm_pkg;
 /
 
@@ -194,6 +208,39 @@ CREATE OR REPLACE PACKAGE BODY plm_pkg AS
         'Change order ' || p_co_number || ' uses OBSOLETE item ' || r.item_number);
     END LOOP;
   END assert_no_obsolete_lines;
+
+  -- the user must exist and have the APPROVER role
+  PROCEDURE assert_approver(p_user_id IN NUMBER) IS
+    v_role users.role%TYPE;
+  BEGIN
+    BEGIN
+      SELECT role INTO v_role FROM users WHERE user_id = p_user_id;
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20008, 'User not found: ' || p_user_id);
+    END;
+
+    IF v_role <> 'APPROVER' THEN
+      RAISE_APPLICATION_ERROR(-20009, 'Only an APPROVER can decide a change order');
+    END IF;
+  END assert_approver;
+
+  -- writes the approval row and moves the change order to its new status
+  PROCEDURE record_decision(
+    p_co_id       IN NUMBER,
+    p_approver_id IN NUMBER,
+    p_decision    IN VARCHAR2,
+    p_comments    IN VARCHAR2
+  ) IS
+  BEGIN
+    INSERT INTO approvals (co_id, approver_id, decision, comments)
+    VALUES (p_co_id, p_approver_id, p_decision, TRIM(p_comments));
+
+    UPDATE change_orders
+    SET status = p_decision,
+        decided_at = SYSTIMESTAMP
+    WHERE co_id = p_co_id;
+  END record_decision;
 
   FUNCTION explode_bom(p_item_id IN NUMBER) RETURN SYS_REFCURSOR IS
     v_cur SYS_REFCURSOR;
@@ -475,6 +522,44 @@ CREATE OR REPLACE PACKAGE BODY plm_pkg AS
         submitted_at = SYSTIMESTAMP
     WHERE co_id = p_co_id;
   END submit_change_order;
+
+  PROCEDURE approve_change_order(
+    p_co_id       IN NUMBER,
+    p_approver_id IN NUMBER,
+    p_comments    IN VARCHAR2 DEFAULT NULL
+  ) IS
+    v_co change_orders%ROWTYPE;
+  BEGIN
+    v_co := lock_change_order(p_co_id);
+    assert_approver(p_approver_id);
+
+    IF v_co.created_by = p_approver_id THEN
+      RAISE_APPLICATION_ERROR(-20010,
+        'The creator cannot approve their own change order ' || v_co.co_number);
+    END IF;
+
+    assert_transition(v_co, 'APPROVED');
+    assert_no_obsolete_lines(p_co_id, v_co.co_number);
+    record_decision(p_co_id, p_approver_id, 'APPROVED', p_comments);
+  END approve_change_order;
+
+  PROCEDURE reject_change_order(
+    p_co_id       IN NUMBER,
+    p_approver_id IN NUMBER,
+    p_comments    IN VARCHAR2
+  ) IS
+    v_co change_orders%ROWTYPE;
+  BEGIN
+    v_co := lock_change_order(p_co_id);
+    assert_approver(p_approver_id);
+
+    IF TRIM(p_comments) IS NULL THEN
+      RAISE_APPLICATION_ERROR(-20011, 'A comment is required to reject a change order');
+    END IF;
+
+    assert_transition(v_co, 'REJECTED');
+    record_decision(p_co_id, p_approver_id, 'REJECTED', p_comments);
+  END reject_change_order;
 
 END plm_pkg;
 /
