@@ -78,6 +78,12 @@ CREATE OR REPLACE PACKAGE plm_pkg AS
     p_approver_id IN NUMBER,
     p_comments    IN VARCHAR2
   );
+
+  -- APPROVED to IMPLEMENTED, applies every line to the BOM and items, all or nothing
+  PROCEDURE implement_change_order(
+    p_co_id   IN NUMBER,
+    p_user_id IN NUMBER
+  );
 END plm_pkg;
 /
 
@@ -241,6 +247,35 @@ CREATE OR REPLACE PACKAGE BODY plm_pkg AS
         decided_at = SYSTIMESTAMP
     WHERE co_id = p_co_id;
   END record_decision;
+
+  -- finds the current BOM line of a change, fails if it no longer matches what was drafted
+  PROCEDURE find_current_bom_line(
+    p_parent_item_id IN  NUMBER,
+    p_child_item_id  IN  NUMBER,
+    p_expected_qty   IN  VARCHAR2,
+    p_line_id        OUT NUMBER,
+    p_qty            OUT NUMBER
+  ) IS
+  BEGIN
+    BEGIN
+      SELECT bom_line_id, quantity INTO p_line_id, p_qty
+      FROM bom_lines
+      WHERE parent_item_id = p_parent_item_id
+        AND child_item_id  = p_child_item_id;
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20012,
+          'Stale change: ' || item_number_of(p_parent_item_id) ||
+          ' no longer contains ' || item_number_of(p_child_item_id));
+    END;
+
+    IF fmt_qty(p_qty) <> p_expected_qty THEN
+      RAISE_APPLICATION_ERROR(-20012,
+        'Stale change: quantity of ' || item_number_of(p_child_item_id) ||
+        ' in ' || item_number_of(p_parent_item_id) || ' is now ' || fmt_qty(p_qty) ||
+        ' but the change order expects ' || p_expected_qty);
+    END IF;
+  END find_current_bom_line;
 
   FUNCTION explode_bom(p_item_id IN NUMBER) RETURN SYS_REFCURSOR IS
     v_cur SYS_REFCURSOR;
@@ -560,6 +595,70 @@ CREATE OR REPLACE PACKAGE BODY plm_pkg AS
     assert_transition(v_co, 'REJECTED');
     record_decision(p_co_id, p_approver_id, 'REJECTED', p_comments);
   END reject_change_order;
+
+  PROCEDURE implement_change_order(
+    p_co_id   IN NUMBER,
+    p_user_id IN NUMBER
+  ) IS
+    v_co      change_orders%ROWTYPE;
+    v_line_id bom_lines.bom_line_id%TYPE;
+    v_qty     bom_lines.quantity%TYPE;
+    v_new_qty NUMBER;
+    v_status  items.lifecycle_status%TYPE;
+  BEGIN
+    v_co := lock_change_order(p_co_id);
+    assert_approver(p_user_id);
+    assert_transition(v_co, 'IMPLEMENTED');
+    assert_no_obsolete_lines(p_co_id, v_co.co_number);
+
+    -- everything below is all or nothing
+    BEGIN
+      SAVEPOINT before_implement;
+
+      -- removals first so they can free the way for additions, lifecycle changes last
+      FOR r IN (
+        SELECT item_id, change_type, old_value, new_value, related_item_id
+        FROM change_order_items
+        WHERE co_id = p_co_id
+        ORDER BY CASE change_type
+                   WHEN 'REMOVE_COMPONENT' THEN 1
+                   WHEN 'CHANGE_QTY'       THEN 2
+                   WHEN 'ADD_COMPONENT'    THEN 3
+                   ELSE 4
+                 END,
+                 co_item_id
+      ) LOOP
+        IF r.change_type = 'REMOVE_COMPONENT' THEN
+          find_current_bom_line(r.item_id, r.related_item_id, r.old_value, v_line_id, v_qty);
+          remove_bom_line(v_line_id);
+
+        ELSIF r.change_type = 'CHANGE_QTY' THEN
+          find_current_bom_line(r.item_id, r.related_item_id, r.old_value, v_line_id, v_qty);
+          v_new_qty := parse_qty(r.new_value);
+          UPDATE bom_lines SET quantity = v_new_qty WHERE bom_line_id = v_line_id;
+
+        ELSIF r.change_type = 'ADD_COMPONENT' THEN
+          -- full validation again, including the cycle check against the current BOM
+          v_line_id := add_bom_line(r.item_id, r.related_item_id, parse_qty(r.new_value));
+
+        ELSE
+          SELECT lifecycle_status INTO v_status FROM items WHERE item_id = r.item_id;
+          IF v_status <> r.old_value THEN
+            RAISE_APPLICATION_ERROR(-20012,
+              'Stale change: ' || item_number_of(r.item_id) || ' is now ' || v_status ||
+              ' but the change order expects ' || r.old_value);
+          END IF;
+          UPDATE items SET lifecycle_status = r.new_value WHERE item_id = r.item_id;
+        END IF;
+      END LOOP;
+
+      UPDATE change_orders SET status = 'IMPLEMENTED' WHERE co_id = p_co_id;
+    EXCEPTION
+      WHEN OTHERS THEN
+        ROLLBACK TO SAVEPOINT before_implement;
+        RAISE;
+    END;
+  END implement_change_order;
 
 END plm_pkg;
 /
