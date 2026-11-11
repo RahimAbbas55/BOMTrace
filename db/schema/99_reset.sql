@@ -32,6 +32,13 @@ BEGIN
     WHEN OTHERS THEN
       -- ORA-02289: sequence does not exist
       IF SQLCODE != -2289 THEN RAISE; END IF;
+      BEGIN
+    EXECUTE IMMEDIATE 'DROP PACKAGE plm_audit';
+  EXCEPTION
+    WHEN OTHERS THEN
+      -- ORA-04043: object does not exist
+      IF SQLCODE != -4043 THEN RAISE; END IF;
+  END;
   END;
 END;
 /
