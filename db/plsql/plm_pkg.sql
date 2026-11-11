@@ -84,6 +84,9 @@ CREATE OR REPLACE PACKAGE plm_pkg AS
     p_co_id   IN NUMBER,
     p_user_id IN NUMBER
   );
+
+  -- for every line of a change order, the assemblies above the changed item, at any level
+  FUNCTION impact_report(p_co_id IN NUMBER) RETURN SYS_REFCURSOR;
 END plm_pkg;
 /
 
@@ -123,6 +126,15 @@ CREATE OR REPLACE PACKAGE BODY plm_pkg AS
     WHEN NO_DATA_FOUND THEN
       RAISE_APPLICATION_ERROR(-20008, 'User not found: ' || p_user_id);
   END assert_user_exists;
+
+  PROCEDURE assert_co_exists(p_co_id IN NUMBER) IS
+    v_dummy NUMBER;
+  BEGIN
+    SELECT 1 INTO v_dummy FROM change_orders WHERE co_id = p_co_id;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE_APPLICATION_ERROR(-20005, 'Change order not found: ' || p_co_id);
+  END assert_co_exists;
 
   -- rejects parent -> child if the child is the parent or one of its ancestors
   PROCEDURE assert_no_cycle(p_parent_item_id IN NUMBER, p_child_item_id IN NUMBER) IS
@@ -659,6 +671,62 @@ CREATE OR REPLACE PACKAGE BODY plm_pkg AS
         RAISE;
     END;
   END implement_change_order;
+
+  FUNCTION impact_report(p_co_id IN NUMBER) RETURN SYS_REFCURSOR IS
+    v_cur SYS_REFCURSOR;
+  BEGIN
+    assert_co_exists(p_co_id);
+
+    OPEN v_cur FOR
+      WITH used_in (co_item_id, parent_item_id, lvl, rolled_qty) AS (
+        SELECT l.co_item_id, b.parent_item_id, 1, CAST(b.quantity AS NUMBER)
+        FROM change_order_items l
+        JOIN bom_lines b ON b.child_item_id = l.item_id
+        WHERE l.co_id = p_co_id
+        UNION ALL
+        SELECT u.co_item_id, b.parent_item_id, u.lvl + 1, u.rolled_qty * b.quantity
+        FROM used_in u
+        JOIN bom_lines b ON b.child_item_id = u.parent_item_id
+      )
+      CYCLE parent_item_id SET is_cycle TO 'Y' DEFAULT 'N',
+      affected AS (
+        SELECT co_item_id,
+               parent_item_id,
+               MIN(lvl)        AS lvl,
+               SUM(rolled_qty) AS total_qty
+        FROM used_in
+        WHERE is_cycle = 'N'
+        GROUP BY co_item_id, parent_item_id
+      )
+      SELECT l.co_item_id,
+             l.change_type,
+             ci.item_number   AS changed_item_number,
+             ci.name          AS changed_item_name,
+             rel.item_number  AS related_item_number,
+             l.old_value,
+             l.new_value,
+             ai.item_id       AS affected_item_id,
+             ai.item_number   AS affected_item_number,
+             ai.name          AS affected_name,
+             ai.item_type     AS affected_type,
+             ai.lifecycle_status AS affected_status,
+             a.lvl,
+             a.total_qty,
+             CASE
+               WHEN a.parent_item_id IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM bom_lines x WHERE x.child_item_id = a.parent_item_id)
+               THEN 'Y' ELSE 'N'
+             END              AS is_top_level
+      FROM change_order_items l
+      JOIN items ci ON ci.item_id = l.item_id
+      LEFT JOIN items rel ON rel.item_id = l.related_item_id
+      LEFT JOIN affected a ON a.co_item_id = l.co_item_id
+      LEFT JOIN items ai ON ai.item_id = a.parent_item_id
+      WHERE l.co_id = p_co_id
+      ORDER BY l.co_item_id, a.lvl, ai.item_number;
+
+    RETURN v_cur;
+  END impact_report;
 
 END plm_pkg;
 /
