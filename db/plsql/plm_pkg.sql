@@ -28,6 +28,10 @@ CREATE OR REPLACE PACKAGE plm_pkg AS
   PRAGMA EXCEPTION_INIT(e_bom_line_not_found,  -20013);
   e_invalid_quantity    EXCEPTION;
   PRAGMA EXCEPTION_INIT(e_invalid_quantity,    -20014);
+  e_item_exists         EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_item_exists,         -20015);
+  e_invalid_item        EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_invalid_item,        -20016);
 
   -- full multi-level BOM of an item, depth first, with rolled-up quantities
   FUNCTION explode_bom(p_item_id IN NUMBER) RETURN SYS_REFCURSOR;
@@ -87,6 +91,25 @@ CREATE OR REPLACE PACKAGE plm_pkg AS
 
   -- for every line of a change order, the assemblies above the changed item, at any level
   FUNCTION impact_report(p_co_id IN NUMBER) RETURN SYS_REFCURSOR;
+
+  -- creates a PROTOTYPE item, the item number is stored in upper case, returns item_id
+  FUNCTION create_item(
+    p_created_by  IN NUMBER,
+    p_item_number IN VARCHAR2,
+    p_name        IN VARCHAR2,
+    p_item_type   IN VARCHAR2,
+    p_description IN VARCHAR2 DEFAULT NULL,
+    p_uom         IN VARCHAR2 DEFAULT 'EA'
+  ) RETURN NUMBER;
+
+  -- changes name, description or unit of measure, a null argument keeps the current value
+  -- lifecycle changes go through change orders, an obsolete item cannot be edited
+  PROCEDURE update_item(
+    p_item_id     IN NUMBER,
+    p_name        IN VARCHAR2 DEFAULT NULL,
+    p_description IN VARCHAR2 DEFAULT NULL,
+    p_uom         IN VARCHAR2 DEFAULT NULL
+  );
 END plm_pkg;
 /
 
@@ -727,6 +750,76 @@ CREATE OR REPLACE PACKAGE BODY plm_pkg AS
 
     RETURN v_cur;
   END impact_report;
+
+  FUNCTION create_item(
+    p_created_by  IN NUMBER,
+    p_item_number IN VARCHAR2,
+    p_name        IN VARCHAR2,
+    p_item_type   IN VARCHAR2,
+    p_description IN VARCHAR2 DEFAULT NULL,
+    p_uom         IN VARCHAR2 DEFAULT 'EA'
+  ) RETURN NUMBER IS
+    v_number items.item_number%TYPE := UPPER(TRIM(p_item_number));
+    v_type   VARCHAR2(10)           := UPPER(TRIM(p_item_type));
+    v_uom    items.uom%TYPE         := NVL(UPPER(TRIM(p_uom)), 'EA');
+    v_id     items.item_id%TYPE;
+  BEGIN
+    assert_user_exists(p_created_by);
+
+    IF v_number IS NULL THEN
+      RAISE_APPLICATION_ERROR(-20016, 'Item number is required');
+    END IF;
+    IF TRIM(p_name) IS NULL THEN
+      RAISE_APPLICATION_ERROR(-20016, 'Item name is required');
+    END IF;
+    IF v_type IS NULL OR v_type NOT IN ('MAKE', 'BUY', 'ASSEMBLY') THEN
+      RAISE_APPLICATION_ERROR(-20016, 'Item type must be MAKE, BUY or ASSEMBLY');
+    END IF;
+
+    INSERT INTO items (item_number, name, description, item_type, uom, created_by)
+    VALUES (v_number, TRIM(p_name), p_description, v_type, v_uom, p_created_by)
+    RETURNING item_id INTO v_id;
+
+    RETURN v_id;
+  EXCEPTION
+    WHEN DUP_VAL_ON_INDEX THEN
+      RAISE_APPLICATION_ERROR(-20015, 'Item number already exists: ' || v_number);
+  END create_item;
+
+  PROCEDURE update_item(
+    p_item_id     IN NUMBER,
+    p_name        IN VARCHAR2 DEFAULT NULL,
+    p_description IN VARCHAR2 DEFAULT NULL,
+    p_uom         IN VARCHAR2 DEFAULT NULL
+  ) IS
+    v_dummy NUMBER;
+  BEGIN
+    -- lock the item so nobody edits or obsoletes it while we check
+    BEGIN
+      SELECT 1 INTO v_dummy FROM items WHERE item_id = p_item_id FOR UPDATE;
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Item not found: ' || p_item_id);
+    END;
+
+    assert_not_obsolete(p_item_id);
+
+    IF p_name IS NULL AND p_description IS NULL AND p_uom IS NULL THEN
+      RAISE_APPLICATION_ERROR(-20016, 'Nothing to update');
+    END IF;
+    IF p_name IS NOT NULL AND TRIM(p_name) IS NULL THEN
+      RAISE_APPLICATION_ERROR(-20016, 'Item name cannot be blank');
+    END IF;
+    IF p_uom IS NOT NULL AND TRIM(p_uom) IS NULL THEN
+      RAISE_APPLICATION_ERROR(-20016, 'Unit of measure cannot be blank');
+    END IF;
+
+    UPDATE items
+    SET name        = COALESCE(TRIM(p_name), name),
+        description = COALESCE(p_description, description),
+        uom         = COALESCE(UPPER(TRIM(p_uom)), uom)
+    WHERE item_id = p_item_id;
+  END update_item;
 
 END plm_pkg;
 /
