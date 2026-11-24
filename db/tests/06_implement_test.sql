@@ -32,11 +32,13 @@ DECLARE
 
   -- current quantity of a BOM line as text, or none when the line does not exist
   FUNCTION qty_of(p_parent IN VARCHAR2, p_child IN VARCHAR2) RETURN VARCHAR2 IS
-    r VARCHAR2(30);
+    r        VARCHAR2(30);
+    v_parent NUMBER := id_of(p_parent);
+    v_child  NUMBER := id_of(p_child);
   BEGIN
     SELECT RTRIM(TO_CHAR(quantity, 'FM999999990.9999'), '.') INTO r
     FROM bom_lines
-    WHERE parent_item_id = id_of(p_parent) AND child_item_id = id_of(p_child);
+    WHERE parent_item_id = v_parent AND child_item_id = v_child;
     RETURN r;
   EXCEPTION
     WHEN NO_DATA_FOUND THEN RETURN 'none';
