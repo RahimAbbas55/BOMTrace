@@ -1,18 +1,20 @@
 <h1 align="center">BOMTrace</h1>
- 
+
 <p align="center">
   <b>Oracle-backed PLM change order tracker</b><br>
   Multi-level BOMs, where-used impact analysis and an approval workflow, with the business rules in PL/SQL.
 </p>
+
 <p align="center">
   <img src="https://img.shields.io/badge/Oracle_Database-F80000?style=for-the-badge&logo=oracle&logoColor=white" alt="Oracle Database">
   <img src="https://img.shields.io/badge/PL%2FSQL-F80000?style=for-the-badge&logo=oracle&logoColor=white" alt="PL/SQL">
   <img src="https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node.js">
   <img src="https://img.shields.io/badge/Express-000000?style=for-the-badge&logo=express&logoColor=white" alt="Express">
 </p>
+
 <p align="center">
   <img src="https://img.shields.io/badge/Status-In_Progress-orange?style=for-the-badge" alt="Status: in progress">
-  <img src="https://img.shields.io/badge/Progress-Day_2_of_10-blue?style=for-the-badge" alt="Progress: Day 2 of 10">
+  <img src="https://img.shields.io/badge/Progress-Day_4_of_10-blue?style=for-the-badge" alt="Progress: Day 4 of 10">
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT">
   <img src="https://img.shields.io/github/last-commit/RahimAbbas55/BOMTrace?style=for-the-badge" alt="Last commit">
 </p>
@@ -25,19 +27,25 @@ Product lifecycle management is built on three things: items, the BOMs that conn
 
 ## What it does
 
-- Stores items with a type (make, buy, assembly) and a lifecycle (prototype, active, obsolete).
-- Models multi-level BOMs and explodes them with rolled-up quantities.
-- Answers where-used: every assembly, at any level, that contains a part.
+- Stores items with a type (make, buy, assembly) and a lifecycle (prototype, active, obsolete). New items start as prototypes, and the lifecycle only changes through change orders.
+- Models multi-level BOMs, explodes them with rolled-up quantities, and answers where-used: every assembly, at any level, that contains a part.
 - Runs change orders through a controlled workflow: draft, submitted, approved or rejected, implemented.
-- Enforces the rules in PL/SQL: valid status transitions, no BOM cycles, no changes to obsolete items, no self-approval, atomic implementation.
-- Keeps an audit trail of every change.
+- Reports the impact of a change order: for every line, the assemblies and finished products above the changed item.
+- Enforces the rules in PL/SQL:
+  - only valid status transitions
+  - no BOM cycles, including loops that two separate change orders would create together
+  - no changes to obsolete items
+  - only approvers decide, and the creator cannot approve their own change order
+  - a rejection needs a comment
+  - implementation is atomic, and rejects change orders that went stale after they were drafted
+- Keeps an audit trail of every insert, update and delete on items, BOM lines and change orders, with the acting user.
 
 ## Architecture
 
 ```
-React (Vite)  ->  Express API (MVC)  ->  PL/SQL package PLM_PKG  ->  Oracle Autonomous DB
-                  JWT auth, roles        business rules, BOM        tables, constraints,
-                  validation             queries, workflow          indexes, audit triggers
+React (Vite)  ->  Express API (MVC)  ->  PL/SQL packages PLM_PKG, PLM_AUDIT  ->  Oracle Autonomous DB
+                  JWT auth, roles        business rules, BOM queries,            tables, constraints,
+                  validation             workflow, audit context                 indexes, audit triggers
 ```
 
 The API is layered: routes, controllers, models (all SQL and PL/SQL calls), plus middlewares for authentication, role checks, validation and error handling. An architecture diagram will replace the sketch above at the end of the project.
@@ -47,16 +55,16 @@ The API is layered: routes, controllers, models (all SQL and PL/SQL calls), plus
 | Layer | Choice |
 |---|---|
 | Database | Oracle Autonomous Database (OCI Always Free) |
-| Database logic | PL/SQL package and triggers |
+| Database logic | PL/SQL packages and triggers |
 | API | Node.js, Express, `node-oracledb` (thin mode) |
 | Auth | JWT, bcrypt, role-based middleware (planned) |
 | Frontend | React with Vite (planned) |
-| Tests | PL/SQL test scripts, Jest and Supertest (planned) |
+| Tests | PL/SQL tests with a Node runner, Jest and Supertest for the API (planned) |
 | DevOps | Docker, GitHub Actions, OCI Compute (planned) |
 
 ## Data model
 
-Seven tables, all with named constraints, identity primary keys and indexed foreign keys.
+Seven tables, all with named constraints, identity primary keys and indexed foreign keys, plus one sequence for change order numbers.
 
 | Table | Purpose |
 |---|---|
@@ -66,7 +74,20 @@ Seven tables, all with named constraints, identity primary keys and indexed fore
 | `CHANGE_ORDERS` | Change order header and workflow status |
 | `CHANGE_ORDER_ITEMS` | The individual changes within a change order |
 | `APPROVALS` | Approval decisions and comments |
-| `AUDIT_LOG` | Generic JSON audit trail |
+| `AUDIT_LOG` | Generic JSON audit trail, before and after values |
+
+## PL/SQL packages
+
+`PLM_PKG` is the only way the application changes data. Every rule failure raises a named `ORA-200xx` error, documented in [docs/error-codes.md](docs/error-codes.md).
+
+| Area | Procedures and functions |
+|---|---|
+| BOM queries | `explode_bom`, `where_used` |
+| BOM editing | `add_bom_line` (rejects cycles), `remove_bom_line` |
+| Items | `create_item`, `update_item` |
+| Change orders | `create_change_order`, `add_co_item`, `submit_change_order`, `approve_change_order`, `reject_change_order`, `implement_change_order`, `impact_report` |
+
+`PLM_AUDIT` holds the acting user for the session and writes the audit rows that the triggers on `ITEMS`, `BOM_LINES` and `CHANGE_ORDERS` produce.
 
 ## Seed data
 
@@ -91,9 +112,8 @@ Demo logins (public demo credentials, only for the seeded database):
 |---|---|---|
 | 1 | Oracle Cloud account, Autonomous DB, working Node connection | Done |
 | 2 | Schema, constraints, indexes, seed data, `explode_bom`, `where_used` | Done |
-| 3 | `add_bom_line` with cycle rejection, change order workflow procedures | Next |
-| 4 | Business rules and custom errors, audit triggers, PL/SQL tests | Planned |
-| 5 to 6 | Express API, JWT auth, role middleware, API tests | Planned |
+| 3 to 4 | Complete PL/SQL layer: BOM editing, change order workflow, implement, impact report, items, audit triggers, tests | Done |
+| 5 to 6 | Express API, JWT auth, role middleware, API tests | Next |
 | 7 to 8 | React UI | Planned |
 | 9 | Docker, GitHub Actions, deployment to OCI | Planned |
 | 10 | README polish, architecture diagram, demo video | Planned |
@@ -109,29 +129,32 @@ Demo logins (public demo credentials, only for the seeded database):
 - [x] Central error handler and not-found middleware
 
 **Day 2**
-- [x] `USERS` and `ITEMS` tables
-- [x] `BOM_LINES` with uniqueness, self-reference check and where-used index
-- [x] `CHANGE_ORDERS`, `CHANGE_ORDER_ITEMS` and `APPROVALS` tables
-- [x] `AUDIT_LOG` table and a dev reset script
+- [x] Tables for users, items, BOM lines, change orders, approvals and the audit log
 - [x] Seed data: users, 58 items, 66 BOM lines, 5 change orders
-- [x] `PLM_PKG.explode_bom` and `PLM_PKG.where_used` (recursive queries with cycle protection)
+- [x] `explode_bom` and `where_used` (recursive queries with cycle protection)
+
+**Day 3 to 4**
+- [x] Named exceptions and an error code reference
+- [x] `add_bom_line` with cycle detection, and `remove_bom_line`
+- [x] `create_change_order` (auto-numbered) and `add_co_item` with per-type validation
+- [x] Status transition check, `submit_change_order`, `approve_change_order`, `reject_change_order`
+- [x] `implement_change_order`: atomic, with stale-change detection
+- [x] `impact_report`
+- [x] `create_item` and `update_item`
+- [x] Audit context package and audit triggers
+- [x] PL/SQL tests, an end-to-end workflow test, a test runner and a PL/SQL installer script
 
 ### Next up
 
-**Day 3: BOM editing and the change order workflow**
-- [ ] `add_bom_line` that rejects cycles (a child cannot be an ancestor of the parent)
-- [ ] `create_change_order` and `add_co_item`
-- [ ] `submit_change_order`, `approve_change_order`, `reject_change_order`
-- [ ] `implement_change_order` as one atomic transaction
-- [ ] `impact_report` for a change order
+**Day 5 to 6: REST API and auth**
+- [ ] JWT login and registration, role middleware for `ENGINEER` and `APPROVER`
+- [ ] Middleware that sets the acting user for the audit trail on every request
+- [ ] Map `ORA-200xx` errors to HTTP statuses using the error code reference
+- [ ] Items, BOM, change order and impact endpoints, each calling a model that calls `PLM_PKG`
+- [ ] Input validation, Helmet and rate limiting on the auth routes
+- [ ] Jest and Supertest tests for auth, roles and the full change order flow
 
-**Day 4: rules, errors, audit and tests**
-- [ ] Custom exceptions with error codes `-20001` and up
-- [ ] Status transition checks, obsolete item protection, no self-approval
-- [ ] Audit triggers on `ITEMS`, `BOM_LINES` and `CHANGE_ORDERS`
-- [ ] PL/SQL tests: cycle detection, where-used at depth 4, every valid and invalid transition, atomic implement, self-approval rejection
-
-**After that:** REST API and auth (Day 5 to 6), React UI (Day 7 to 8), Docker and CI/CD (Day 9), polish and demo video (Day 10).
+**After that:** React UI (Day 7 to 8), Docker and CI/CD (Day 9), polish and demo video (Day 10).
 
 ## Planned API
 
@@ -150,6 +173,7 @@ Base path `/api`. Only the health endpoint exists today.
 ```
 bomtrace-plm/
   api/
+    scripts/         run-db-tests.js, install-plsql.js
     src/
       config/        environment and Oracle pool
       routes/        URL to controller mapping
@@ -160,12 +184,12 @@ bomtrace-plm/
       app.js
       server.js
   db/
-    schema/          table scripts and the dev reset script
+    schema/          table scripts, change order number sequence, dev reset script
     seed/            demo data
-    plsql/           PLM_PKG
-    tests/           PL/SQL tests (to come)
+    plsql/           PLM_PKG, PLM_AUDIT, audit triggers
+    tests/           PL/SQL tests
   web/               React app (to come)
-  docs/
+  docs/              error code reference
 ```
 
 ## Local setup
@@ -174,9 +198,8 @@ bomtrace-plm/
 2. Download the instance wallet and unzip it into `api/wallet/`. This folder is gitignored.
 3. As `ADMIN`, run `db/schema/00_create_app_user.sql`. The password must be 12 to 30 characters with an uppercase letter, a lowercase letter and a digit.
 4. As `PLM_APP`, run in order:
-   - `db/schema/01_users_items.sql`, `02_bom_lines.sql`, `03_change_orders.sql`, `04_audit_log.sql`
+   - `db/schema/01_users_items.sql`, `02_bom_lines.sql`, `03_change_orders.sql`, `04_audit_log.sql`, `05_co_number_seq.sql`
    - `db/seed/01_seed_users_items.sql`, `02_seed_bom.sql`, `03_seed_change_orders.sql`
-   - `db/plsql/plm_pkg.sql`
 5. Copy `.env.example` to `api/.env` and fill in the values:
 
    | Variable | Meaning |
@@ -187,23 +210,33 @@ bomtrace-plm/
    | `DB_WALLET_DIR` | `./wallet` |
    | `DB_WALLET_PASSWORD` | the password set when downloading the wallet |
 
-6. Start the API:
+6. Install the PL/SQL packages and triggers. This prints any compile errors:
    ```bash
    cd api
    npm install
-   npm run dev
+   npm run db:plsql
    ```
-7. Check it:
+7. Start the API and check it:
    ```bash
+   npm run dev
    curl localhost:3000/api/health
    ```
    Expected: `{"status":"ok","db":"up"}`
 
-To rebuild the schema from scratch, run `db/schema/99_reset.sql` (it drops all data), then repeat step 4.
+To rebuild the database from scratch, run `db/schema/99_reset.sql` (it drops all data), then repeat steps 4 and 6.
 
 ## Testing
 
-PL/SQL and API tests are planned for Day 4 to 6. The README will report the real coverage numbers once they exist.
+The PL/SQL layer has one test file per feature in `db/tests/`, plus an end-to-end workflow test. Each file prints `PASS` or `FAIL` lines and rolls back everything it did.
+
+```bash
+cd api
+npm run test:db
+```
+
+The runner executes every file, prints the pass count per file, and exits with a non-zero code if any check fails, so it can run in CI. Run it against a database that only holds the seed data, because some tests rely on the seeded change orders and quantities. The numbers here are the real ones from the last run: 9 files, 117 checks.
+
+API tests with Jest and Supertest come with Day 5 and 6, and their coverage will be reported here.
 
 ## License
 
