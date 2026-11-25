@@ -38,4 +38,9 @@ async function closePool() {
   if (pool) await pool.close(10);
 }
 
-module.exports = { initPool, withConnection, closePool };
+// borrows a connection for a whole request, the caller must close it
+async function acquireConnection() {
+  return pool.getConnection();
+}
+
+module.exports = { initPool, withConnection, closePool, acquireConnection };
