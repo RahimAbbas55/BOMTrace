@@ -13,7 +13,7 @@ const getHealth = asyncHandler(async (req , res) => {
     }
     res.json({
         status: 'ok',
-        db: 'up,'
+        db: 'up'
     })
 });
 
