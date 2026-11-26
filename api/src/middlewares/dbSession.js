@@ -9,41 +9,41 @@ const AppError = require('../utils/AppError');
 const cleanupSql = 'BEGIN ROLLBACK; plm_audit.clear_user; END;';
 
 async function release(conn) {
-    let broken = false;
+  let broken = false;
 
-    try {
-        // a connection we could not clean must not go back into the pool
-        if (broken) {
-            await conn.close({ drop: true });
-        } else {
-            await conn.close();
-        }
-    } catch (err) {
-        console.error('Releasing the connection failed:', err.message);
-    }
+  try {
+    await conn.execute(cleanupSql);
+  } catch (err) {
+    broken = true;
+    console.error('Session cleanup failed:', err.message);
+  }
 
-    try {
-        // a connection we could not clean must not go back into the pool
-        await conn.close(broken ? { drop: true } : undefined);
-    } catch (err) {
-        console.error('Releasing the connection failed:', err.message);
+  try {
+    // a connection we could not clean must not go back into the pool
+    if (broken) {
+      await conn.close({ drop: true });
+    } else {
+      await conn.close();
     }
+  } catch (err) {
+    console.error('Releasing the connection failed:', err.message);
+  }
 }
 
 async function dbSession(req, res, next) {
-    let conn;
-    try {
-        conn = await acquireConnection();
-    } catch (err) {
-        return next(new AppError('Database unavailable', 503));
-    }
+  let conn;
+  try {
+    conn = await acquireConnection();
+  } catch (err) {
+    return next(new AppError('Database unavailable', 503));
+  }
 
-    req.db = conn;
+  req.db = conn;
 
-    // close fires after the response was sent, or when the client went away
-    res.once('close', () => release(conn));
+  // close fires after the response was sent, or when the client went away
+  res.once('close', () => release(conn));
 
-    return next();
+  return next();
 }
 
 module.exports = dbSession;
